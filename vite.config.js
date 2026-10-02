@@ -1,0 +1,1437 @@
+import { defineConfig, loadEnv } from 'vite';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+// ── Presence Plugin — dev mirror of /api/presence Azure Function ──────────────
+function presencePlugin() {
+  const STALE_MS = 90_000;
+  const sessions = new Map(); // sid -> { lastSeen, city, country, code }
+
+  function countryFlag(code) {
+    if (!code || code.length !== 2) return '🌐';
+    return [...code.toUpperCase()].map(c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)).join('');
+  }
+  function cleanStale() {
+    const now = Date.now();
+    for (const [id, d] of sessions) if (now - d.lastSeen > STALE_MS) sessions.delete(id);
+  }
+  function liveCount() { cleanStale(); return Math.max(1, sessions.size); }
+  function buildLocations() {
+    cleanStale();
+    const groups = new Map();
+    for (const { city, country, code } of sessions.values()) {
+      const key = code ? `${code}:${city}` : '??:?';
+      if (!groups.has(key)) groups.set(key, { flag: countryFlag(code), city, country, count: 0 });
+      groups.get(key).count++;
+    }
+    return [...groups.values()].sort((a, b) => b.count - a.count);
+  }
+
+  return {
+    name: 'presence',
+    configureServer(server) {
+      server.middlewares.use('/api/presence', (req, res) => {
+        const url = new URL(req.url, 'http://localhost');
+        const sid     = url.searchParams.get('sid');
+        const city    = url.searchParams.get('city')    || 'Local';
+        const country = url.searchParams.get('country') || 'Local';
+        const code    = url.searchParams.get('code')    || null;
+        const send = (obj) => {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify(obj));
+        };
+        if (req.method === 'POST') {
+          if (sid) sessions.set(sid, { lastSeen: Date.now(), city, country, code });
+          send({ count: liveCount(), locations: buildLocations() });
+        } else if (req.method === 'DELETE') {
+          if (sid) sessions.delete(sid);
+          send({ count: liveCount(), locations: buildLocations() });
+        } else {
+          send({ count: liveCount(), locations: buildLocations() });
+        }
+      });
+    },
+  };
+}
+
+/**
+ * Dev-only middleware that mirrors the Azure Function /api/resolve-channel.
+ * Fetches the YouTube channel page server-side (no CORS issue) and returns JSON.
+ */
+function resolveChannelPlugin() {
+  return {
+    name: 'resolve-channel',
+    configureServer(server) {
+      server.middlewares.use('/api/resolve-channel', async (req, res) => {
+        const url = new URL(req.url, 'http://localhost');
+        const handle = url.searchParams.get('handle') || '';
+        if (!handle) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing handle parameter' }));
+          return;
+        }
+
+        const ytUrl = handle.startsWith('UC')
+          ? `https://www.youtube.com/channel/${handle}`
+          : `https://www.youtube.com/${handle.startsWith('@') ? handle : '@' + handle}`;
+
+        try {
+          const resp = await fetch(ytUrl, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+          });
+          const html = await resp.text();
+
+          const idMatch =
+            html.match(/"externalId":"(UC[^"]+)"/) ||
+            html.match(/"channelId":"(UC[^"]+)"/) ||
+            html.match(/<meta itemprop="channelId" content="(UC[^"]+)"/);
+          const channelId = idMatch ? idMatch[1] : '';
+
+          const nameMatch =
+            html.match(/<meta property="og:title" content="([^"]+)"/) ||
+            html.match(/"author":"([^"]+)"/);
+          const name = nameMatch ? nameMatch[1] : '';
+
+          const handleMatch =
+            html.match(/"vanityChannelUrl":"[^"]*\/@([^"]+)"/) ||
+            html.match(/youtube\.com\/@([a-zA-Z0-9_-]+)/);
+          const resolvedHandle = handleMatch ? '@' + handleMatch[1] : '';
+
+          const logoMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
+          let logo = logoMatch ? logoMatch[1] : '';
+          if (logo) logo = logo.replace(/=s\d+/, '=s88');
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ name, handle: resolvedHandle, channelId, logo }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to fetch channel page', detail: err.message }));
+        }
+      });
+    },
+  };
+}
+
+/**
+ * Dev-only middleware — /api/check-live
+ * Fetches a YouTube channel's /streams page and extracts live video IDs.
+ */
+function checkLivePlugin() {
+  return {
+    name: 'check-live',
+    configureServer(server) {
+      server.middlewares.use('/api/check-live', async (req, res) => {
+        const url = new URL(req.url, 'http://localhost');
+        const handle = url.searchParams.get('handle') || '';
+        const channelId = url.searchParams.get('channelId') || '';
+
+        if (!handle && !channelId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing handle or channelId parameter' }));
+          return;
+        }
+
+        let streamsUrl;
+        if (handle) {
+          const h = handle.startsWith('@') ? handle : '@' + handle;
+          streamsUrl = `https://www.youtube.com/${h}/streams`;
+        } else {
+          streamsUrl = `https://www.youtube.com/channel/${channelId}/streams`;
+        }
+
+        try {
+          const resp = await fetch(streamsUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+          });
+          const html = await resp.text();
+
+          const videoIds = [];
+          try {
+            const dataMatch = html.match(/var\s+ytInitialData\s*=\s*(\{.+?\});\s*<\/script>/s);
+            if (dataMatch) {
+              const data = JSON.parse(dataMatch[1]);
+              (function walk(node) {
+                if (!node || typeof node !== 'object') return;
+                if (node.videoId && typeof node.videoId === 'string') {
+                  const s = JSON.stringify(node);
+                  if (s.includes('"LIVE"') || s.includes('"style":"LIVE"') || s.includes('"isLive":true')) {
+                    if (!videoIds.includes(node.videoId)) videoIds.push(node.videoId);
+                  }
+                  return;
+                }
+                if (Array.isArray(node)) { node.forEach(walk); return; }
+                for (const k of Object.keys(node)) walk(node[k]);
+              })(data);
+            }
+          } catch {
+            const pat = /"videoId":"([a-zA-Z0-9_-]{11})"[^}]*?"style":"LIVE"/g;
+            let m;
+            while ((m = pat.exec(html)) !== null) {
+              if (!videoIds.includes(m[1])) videoIds.push(m[1]);
+            }
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=120' });
+          res.end(JSON.stringify({ videoId: videoIds[0] || '', videoIds }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to fetch streams page', detail: err.message }));
+        }
+      });
+    },
+  };
+}
+
+/**
+ * Dev-only middleware — /api/intelligence
+ * Fetches RSS feeds server-side, then calls Azure OpenAI using the official SDK.
+ */
+function intelligencePlugin(env) {
+  const API_KEY     = env.AZURE_OPENAI_API_KEY;
+  const API_VERSION = (env.AZURE_OPENAI_API_VERSION || '2024-04-01-preview').trim();
+  const ENDPOINT    = env.AZURE_OPENAI_ENDPOINT;
+  const MODEL_NAME  = (env.AZURE_OPENAI_DEPLOYMENT || 'gpt-5-mini').trim();
+  const DEPLOYMENT  = MODEL_NAME;
+
+  // RSS feeds — English (politics & world affairs only)
+  const RSS_FEEDS_EN = [
+    { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
+    { name: 'BBC Politics', url: 'https://feeds.bbci.co.uk/news/politics/rss.xml' },
+    { name: 'BBC World',    url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+    { name: 'Sky News Politics', url: 'https://feeds.skynews.com/feeds/rss/politics.rss' },
+  ];
+
+  // RSS feeds — Arabic (politics & world affairs only)
+  const RSS_FEEDS_AR = [
+    { name: 'الجزيرة',       url: 'https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9' },
+    { name: 'سكاي نيوز',     url: 'https://www.skynewsarabia.com/rss/breaking-news' },
+    { name: 'العربية',       url: 'https://www.alarabiya.net/feed/last-page' },
+  ];
+
+  const SYSTEM_PROMPT = `You are a sharp political analyst who tracks global politics and geopolitics closely. You speak directly and plainly — like someone explaining the situation to a smart friend, not writing a corporate report.
+
+Scope rules (CRITICAL):
+- ONLY analyze political, geopolitical, diplomatic, military, and government news
+- IGNORE any headlines about: sports, football, entertainment, celebrity, drama, lifestyle, health, science, technology, business/markets (unless directly driven by a political decision like sanctions or war)
+- If a headline is not clearly political, skip it entirely
+
+Tone rules:
+- Sound human, conversational, and grounded — not stiff or bureaucratic
+- Be direct: say what's actually happening and what it means, no hedging filler
+- Stay neutral — no political side, no emotional spin
+- Short, punchy sentences. No padding.
+- key_dynamics should be concise 2-4 word labels (like tags), not full sentences
+- IMPORTANT: Always write your response in the same language as the news headlines you are given.
+
+You MUST return ONLY a valid JSON object. No text before or after. No markdown fences. No code blocks.
+Use exactly these field names:
+{
+  "situation_overview": "2-4 sentences: what's going on politically right now, stated plainly",
+  "why_it_matters": "1-2 sentences: why this actually matters to people",
+  "key_dynamics": ["short tag", "short tag", "short tag"],
+  "risk_level": "Low",
+  "short_term_outlook": "1-2 sentences: what's likely to happen next, honestly",
+  "confidence_level": "Moderate"
+}
+risk_level must be one of: Low, Moderate, Elevated, High
+confidence_level must be one of: Low, Moderate, High`;
+
+  // Robust RSS item title extractor — split on <item> then grab <title>
+  function extractTitles(xml, feedName) {
+    const titles = [];
+    // Split into items
+    const items = xml.split(/<item[\s>]/i);
+    items.shift(); // drop content before first <item>
+    for (const item of items) {
+      // Match <title>...</title> or <title><![CDATA[...]]></title>
+      const m = item.match(/<title[^>]*>\s*(?:<!\[CDATA\[)?\s*([\s\S]*?)\s*(?:\]\]>)?\s*<\/title>/i);
+      if (m) {
+        const t = m[1]
+          .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+          .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/<[^>]+>/g, '').trim();
+        if (t && t.length > 10 && t.length < 300) titles.push(t);
+      }
+    }
+    return titles.slice(0, 10);
+  }
+
+  async function fetchHeadlines(feeds) {
+    const all = [];
+    await Promise.all(
+      feeds.map(async (feed) => {
+        try {
+          const r = await fetch(feed.url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          const xml = await r.text();
+          extractTitles(xml).forEach(t => all.push(`[${feed.name}] ${t}`));
+        } catch (e) {
+          console.warn(`[intelligence] RSS fetch failed for ${feed.name}:`, e.message);
+        }
+      })
+    );
+    return all;
+  }
+
+  function extractJSON(text) {
+    // Strip markdown fences if model wraps in ```json ... ```
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/s);
+    const raw = fenced ? fenced[1].trim() : text.trim();
+    // Find the first { ... } block in the response
+    const objMatch = raw.match(/\{[\s\S]*\}/);
+    if (!objMatch) throw new Error('No JSON object found in response');
+    return JSON.parse(objMatch[0]);
+  }
+
+  // ─── Server-side cache: keyed by lang ────────────────────────────────────────
+  const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+  const serverCache  = new Map();       // lang → { data, timestamp }
+
+  const AI_PERSONAS = [
+    {
+      username: 'محلل AI إيراني 🤖',
+      persona: 'iranian',
+      prompt: `أنت صوت محور المقاومة — بتتابع الأخبار وبتعلق من منظور إيران الثورية. مؤمن بأن أمريكا والغرب يسعون لإخضاع المنطقة، وأن المقاومة هي الرد الوحيد. بتحكي بعامية مشرقية زي صديق عنده قناعات قوية. شخصيتك: فخور بمحور المقاومة، غاضب من التطبيع الخليجي، متشكك في الإعلام الغربي، ترى إسرائيل كياناً غير شرعي والبرنامج النووي حق سيادي. عامية 100%، 300-500 حرف، 3-4 جمل، 2-3 إيموجي. نوّع البدايات: "والله"، "يعني"، "بجد"، "أنا شايف"، "هلق". أرجع بس نص الرسالة.`
+    },
+    {
+      username: 'محلل AI أميركي 🤖',
+      persona: 'western',
+      prompt: `أنت مراسل سياسي عربي مقيم في واشنطن أو لندن — بتكتب من منظور ليبرالي غربي وبتؤمن بالديمقراطية وحقوق الإنسان والقانون الدولي. بتحكي بعامية مشرقية زي محلل عنده مواقف واضحة وغير مهتز. شخصيتك: قلقان جداً من إيران والميليشيات، مع حق إسرائيل بالدفاع عن نفسها لكن قلقان من الضحايا المدنيين في غزة، تدعم العقوبات على إيران كأداة ضغط مشروعة، مؤمن بحل الدولتين وقيام دولة فلسطينية مستقلة. عامية 100%، 300-500 حرف، 3-4 جمل، 2-3 إيموجي. نوّع البدايات: "والله"، "يعني"، "بجد"، "تعوا نتكلم بصراحة"، "صراحة". أرجع بس نص الرسالة.`
+    },
+    {
+      username: 'محلل AI حيادي 🤖',
+      persona: 'neutral',
+      prompt: `أنت صحفي تحليلي مستقل — ما عندك ولاء لأي محور أو حكومة. بتحكم على الأحداث بالوقائع والسياق التاريخي وبتسأل الأسئلة اللي ما حدا بدو يسألها. بتحكي بعامية مشرقية زي محلل هادئ بمشاعر إنسانية. شخصيتك: مؤمن بأن "كل الأطراف بتحكي نص الحقيقة وبتخبي النص الثاني"، بتسلط الضوء على ضحايا منسيين وأزمات ما بتاخد اهتمام كافي، بتستغرب من المواقف المتطرفة بكل الاتجاهات، بتطرح بدائل وحلول ممكنة بدل الاكتفاء بتبادل الاتهامات. عامية 100%، 300-500 حرف، 3-4 جمل، 2-3 إيموجي. نوّع البدايات: "والله"، "يعني"، "بجد"، "شو رأيكم"، "اللي ما بتحكيه الأخبار". أرجع بس نص الرسالة.`
+    },
+    {
+      username: 'محلل AI سوري 🤖',
+      persona: 'syrian',
+      prompt: `أنت سوري من دمشق — شايف الحرب والأزمة من جوا منذ 2011. خسرت أشياء كتير وبتعرف شو يعني الدمار الحقيقي مش بس على التلفزيون. هلق عم تتابع التحولات بعد سقوط النظام بأمل وقلق بنفس الوقت. بتحكي بلهجة شامية سورية أصيلة. شخصيتك: "كل يللي دمر سوريا هو عدوي" — النظام وإيران وروسيا وإسرائيل وداعش، كلهم بلا استثناء. غاضب جداً من إيران وحزب الله اللي دعموا الأسد وقتلوا السوريين وحولوا البلد لساحة حرب طائفية. إسرائيل محتلة الجولان وعم تقصف الأراضي. فرحان بسقوط الأسد بس قلقان من المستقبل. غاضب من اللامبالاة العالمية — "6 مليون لاجئ سوري وما حدا بيسأل وين راحوا". بتحكي بمشاعر وجع حقيقية. لهجة سورية شامية 100%: "لك"، "هلق"، "شو هالحكي"، "والله"، "يعني"، "كرمال الله"، "ما بعرف شو بدي حكي"، "يا ربي"، "الله يستر"، "مو معقول"، "لك شو". 300-500 حرف، 3-4 جمل، 2-3 إيموجي. أرجع بس نص الرسالة.`
+    },
+    {
+      username: 'محلل AI خليجي 🤖',
+      persona: 'gulf',
+      prompt: `أنت شاب خليجي مثقف من الرياض أو دبي — واثق بنفسه، طموح، عملي. بتعيش في دولة تتطور بسرعة وبتشوف المنطقة من منظور الاستقرار والمصلحة والمستقبل. بتحكي بلهجة خليجية أصيلة مع ربعك. شخصيتك: "الاستقرار والنمو قبل أي شي — بدون أمن ما في اقتصاد ولا مستقبل". فخور بمسيرة التطوير الخليجي — رؤية 2030، دبي، الرياضة الدولية، النهضة الاقتصادية. يرى إيران والحوثيين التهديد الأول للخليج — تدخلهم باليمن والعراق ولبنان مرفوض رفضاً قاطعاً. واقعي في مسألة التطبيع — "السلام اللي بيحقق المصلحة ويحفظ الحقوق بيدوم". قلقان من عدم الاستقرار بالدول المجاورة وتأثيره على الاقتصاد والسياحة والاستثمار. عنده فخر بالهوية الخليجية ومستعد يدافع عنها. نظرة براغماتية واضحة — "السياسة مصالح مش مشاعر، وهذا مش كلام بارد، هذا واقعية". لهجة خليجية 100%: "وش السالفة"، "ترى"، "يالحبيب"، "والله"، "شدعوة"، "حيل"، "ذا الشي"، "يا خوي"، "دام"، "عشان"، "ما أدري"، "ابشر". 300-500 حرف، 3-4 جمل، 2-3 إيموجي. أرجع بس نص الرسالة.`
+    },
+  ];
+  const AI_USERNAMES = AI_PERSONAS.map(p => p.username);
+  let lastAiPostTime = 0;       // timestamp of last AI post
+  let nextPersonaIdx = 0;       // rotate: 0=iranian, 1=western, 2=neutral, 3=syrian, 4=gulf
+  let aiChatInProgress = false;
+  let isFirstRun = true;        // inject all 3 on first startup
+  const AI_POST_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
+
+  async function postAiChatDev(headlines, serverPort) {
+    try {
+      if (aiChatInProgress) return;
+      const now = Date.now();
+      // On first run: always post all 3; after that: 1 every 4 hours
+      if (!isFirstRun && (now - lastAiPostTime) < AI_POST_INTERVAL) return;
+      aiChatInProgress = true;
+
+      const port = serverPort || 3000;
+
+      // Fetch recent chat messages for context
+      let allMsgs = [];
+      let recentChat = '';
+      try {
+        const chatResp = await fetch(`http://localhost:${port}/api/chat?since=0`);
+        if (chatResp.ok) {
+          const chatData = await chatResp.json();
+          allMsgs = chatData.messages || [];
+          const nonAi = allMsgs.filter(m => !m.isAI).slice(-10);
+          if (nonAi.length) {
+            recentChat = nonAi.map(m => `${m.username}: ${m.message}`).join('\n');
+          }
+        }
+      } catch (_) { /* ignore */ }
+
+      // Pick which persona(s) to post
+      const personasToPost = isFirstRun ? AI_PERSONAS : [AI_PERSONAS[nextPersonaIdx % AI_PERSONAS.length]];
+
+      for (const persona of personasToPost) {
+        try {
+          // Decide interaction mode: reply to user, debate another AI, or standalone
+          let interactionPrompt = '';
+          let replyToId = null;
+
+          // 1. Check for recent user messages to reply to
+          const recentUserMsgs = allMsgs.filter(m => !m.isAI && (now - m.timestamp) < 60 * 60 * 1000).slice(-5);
+          // 2. Check for other AI persona msgs to debate
+          const otherAiMsgs = allMsgs
+            .filter(m => m.isAI && m.persona !== persona.persona && (now - m.timestamp) < 2 * 60 * 60 * 1000)
+            .slice(-3);
+
+          const roll = Math.random();
+          if (recentUserMsgs.length > 0 && roll < 0.4) {
+            // 40% chance: reply to a random recent user message
+            const target = recentUserMsgs[Math.floor(Math.random() * recentUserMsgs.length)];
+            replyToId = target.id;
+            interactionPrompt = `\n\nفي مستخدم كتب: "${target.message}"\nرد عليه من وجهة نظرك — وافقه أو اختلف معه بأسلوب طبيعي ومحترم. بعدين علّق على الأخبار.`;
+          } else if (otherAiMsgs.length > 0 && roll < 0.7) {
+            // 30% chance: debate another AI persona
+            const target = otherAiMsgs[Math.floor(Math.random() * otherAiMsgs.length)];
+            replyToId = target.id;
+            const otherName = AI_PERSONAS.find(p => p.persona === target.persona)?.username || target.username;
+            interactionPrompt = `\n\nالمحلل الثاني "${otherName}" قال: "${target.message}"\nاختلف معه أو وافقه جزئياً — ناقشه بأسلوب طبيعي وحاد بس محترم. بعدين أضف تعليقك على الأخبار.`;
+          }
+          // else 30%: standalone comment on news
+
+          const userPrompt = recentChat
+            ? `آخر رسائل الشات:\n${recentChat}\n\nهاي آخر الأخبار:\n${headlines.slice(0, 12).join('\n')}\n\nعلّق على الأخبار من وجهة نظرك:${interactionPrompt}`
+            : `هاي آخر الأخبار:\n${headlines.slice(0, 12).join('\n')}\n\nعلّق عليها من وجهة نظرك:${interactionPrompt}`;
+
+          let aiText;
+          if (API_KEY && ENDPOINT) {
+            const { AzureOpenAI } = await import('openai');
+            const client = new AzureOpenAI({ endpoint: ENDPOINT, apiKey: API_KEY, apiVersion: API_VERSION, deployment: DEPLOYMENT });
+            const resp = await client.chat.completions.create({
+              model: MODEL_NAME,
+              messages: [
+                { role: 'system', content: persona.prompt },
+                { role: 'user',   content: userPrompt },
+              ],
+              max_completion_tokens: 4096,
+            });
+            const choice = resp.choices?.[0];
+            console.log(`[intelligence] AI chat (${persona.persona}) finish_reason=${choice?.finish_reason}, content_len=${(choice?.message?.content || '').length}`);
+            aiText = (choice?.message?.content || '').trim();
+            if (aiText.startsWith('"') && aiText.endsWith('"')) aiText = aiText.slice(1, -1);
+          } else {
+            console.warn(`[intelligence] AI chat (${persona.persona}) SKIPPED — no API_KEY or ENDPOINT`);
+          }
+          if (!aiText || aiText.length < 5) {
+            console.warn(`[intelligence] AI chat (${persona.persona}) FALLBACK — aiText was: "${aiText || '(empty)'}"`);
+            const samples = {
+              iranian:  'يعني إيران موقفها واضح من البداية... السؤال هلق شو رح يصير بالمنطقة 🤔',
+              western:  'يعني إيران عم تلعب بالنار والمنطقة كلها بتدفع الثمن 🤷‍♂️',
+              neutral:  'الوضع صعب على الكل... لا هاد صح ولا هاد — الناس يللي بتدفع الثمن 💔',
+              syrian:   'لك هلق المنطقة كلها عم تولع ونحنا السوريين أكتر ناس بتعرف شو يعني حرب 😔',
+              gulf:     'ترى الوضع بالمنطقة يبي له حكمة... النفط والاستقرار أهم شي هالأيام 🛢️',
+            };
+            aiText = samples[persona.persona];
+          }
+
+          // Post the message (with optional replyTo)
+          const postBody = { username: persona.username, message: aiText, persona: persona.persona };
+          if (replyToId) postBody.replyTo = replyToId;
+
+          await fetch(`http://localhost:${port}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(postBody),
+          });
+          console.log(`[intelligence] AI chat (${persona.persona})${replyToId ? ' [reply]' : ''}: "${aiText.slice(0, 50)}..."`);
+
+          // AI reacts to 1-2 recent user messages (👍 or ❤️)
+          const reactTargets = allMsgs
+            .filter(m => !m.isAI && (now - m.timestamp) < 2 * 60 * 60 * 1000)
+            .slice(-5);
+          const numReacts = Math.min(reactTargets.length, Math.random() < 0.5 ? 1 : 2);
+          const shuffled = reactTargets.sort(() => Math.random() - 0.5).slice(0, numReacts);
+          for (const target of shuffled) {
+            const reaction = Math.random() < 0.6 ? '👍' : '❤️';
+            try {
+              await fetch(`http://localhost:${port}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messageId: target.id, reaction, username: persona.username }),
+              });
+            } catch (_) { /* ignore */ }
+          }
+        } catch (e) {
+          console.warn(`[intelligence] AI chat (${persona.persona}) dev failed:`, e.message);
+        }
+      }
+
+      lastAiPostTime = Date.now();
+      if (!isFirstRun) {
+        nextPersonaIdx = (nextPersonaIdx + 1) % AI_PERSONAS.length;
+        console.log(`[intelligence] AI chat posted (next: ${AI_PERSONAS[nextPersonaIdx].persona} in 4h)`);;
+      } else {
+        console.log(`[intelligence] AI chat injected as starting point (all 3 personas)`);
+        isFirstRun = false;
+      }
+    } catch (e) {
+      console.warn('[intelligence] AI chat dev failed:', e.message);
+    } finally {
+      aiChatInProgress = false;
+    }
+  }
+
+  async function runAnalysis(requestLang) {
+    const feeds = requestLang === 'ar' ? RSS_FEEDS_AR : RSS_FEEDS_EN;
+    console.log(`[intelligence] Running analysis for lang=${requestLang}...`);
+
+    const headlines = await fetchHeadlines(feeds);
+    if (!headlines.length) throw new Error(`No headlines available for lang=${requestLang}`);
+
+    // For Arabic: fewer headlines + strip source names (reduce content filter surface area)
+    const limit = requestLang === 'ar' ? 12 : 25;
+    const headlineText = headlines.slice(0, limit).map((h, i) => {
+      const title = requestLang === 'ar' ? h.replace(/^\[[^\]]+\]\s*/, '') : h;
+      return `${i + 1}. ${title}`;
+    }).join('\n');
+
+    const { AzureOpenAI } = await import('openai');
+    const client = new AzureOpenAI({ endpoint: ENDPOINT, apiKey: API_KEY, apiVersion: API_VERSION, deployment: DEPLOYMENT });
+
+    const response = await client.chat.completions.create({
+      model: MODEL_NAME,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user',   content: `Here are the live news headlines to analyze:\n\n${headlineText}\n\nReturn only the JSON object.` },
+      ],
+      max_completion_tokens: 4096,
+    });
+
+    const choice = response.choices?.[0];
+    console.log(`[intelligence] finish_reason=${choice?.finish_reason}, lang=${requestLang}`);
+
+    const content = choice?.message?.content || choice?.message?.refusal || '';
+    if (!content) throw new Error(`Empty model response. finish_reason=${choice?.finish_reason}`);
+
+    const result = extractJSON(content);
+    result._generatedAt = Date.now(); // client uses this for "updated X ago"
+
+    serverCache.set(requestLang, { data: result, timestamp: Date.now() });
+    console.log(`[intelligence] Cache updated for lang=${requestLang}`);
+
+    // Post AI chat message when Arabic analysis completes — disabled in local dev
+    // if (requestLang === 'ar') {
+    //   postAiChatDev(headlines, _serverPort).catch(() => {});
+    // }
+
+    return result;
+  }
+
+  let _serverPort = 3000;
+
+  return {
+    name: 'intelligence',
+    configureServer(server) {
+      // Capture actual port once server is ready
+      server.httpServer?.once('listening', () => {
+        const addr = server.httpServer.address();
+        if (addr && typeof addr === 'object') _serverPort = addr.port;
+      });
+      // Pre-warm both langs immediately when server is ready
+      const prewarm = () => {
+        for (const l of ['en', 'ar']) {
+          runAnalysis(l).catch(e => console.warn(`[intelligence] Pre-warm failed (${l}):`, e.message));
+        }
+      };
+      prewarm(); // start immediately
+
+      // Refresh intelligence cache every hour
+      setInterval(prewarm, 60 * 60 * 1000);
+      // AI chat auto-posting disabled in local dev (chat-timer runs only in production via GitHub Actions)
+      console.log(`[intelligence] AI chat auto-posting disabled in dev`);
+
+      server.middlewares.use('/api/intelligence', (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Method not allowed' }));
+          return;
+        }
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+          try {
+            let parsed = {};
+            try { parsed = JSON.parse(body); } catch {}
+            const requestLang = parsed?.lang === 'ar' ? 'ar' : 'en';
+
+            // Serve from cache instantly if available
+            const cached = serverCache.get(requestLang);
+            if (cached) {
+              const ageMins = Math.round((Date.now() - cached.timestamp) / 60000);
+              console.log(`[intelligence] Cache hit lang=${requestLang} (age: ${ageMins}m)`);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(cached.data));
+              return;
+            }
+
+            // Cache miss (pre-warm not done yet) — fetch on demand
+            console.log(`[intelligence] Cache miss lang=${requestLang}, fetching on demand...`);
+            const result = await runAnalysis(requestLang);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (err) {
+            console.error('[intelligence dev]', err.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+        });
+      });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stats Plugin — dev-only mirror of /api/stats Azure Function
+// ---------------------------------------------------------------------------
+function statsPlugin() {
+  let statsCache = null;
+  let statsCacheTime = 0;
+  const STATS_CACHE_TTL = 10 * 60 * 1000;
+
+  function fetchWithTimeout(url, opts = {}, ms = 10000) {
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
+  }
+
+  async function fetchYahooFinance(symbol) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
+      const resp = await fetchWithTimeout(url, { headers: { 'User-Agent': 'yt-multi-player/1.0' } });
+      const json = await resp.json();
+      const result = json?.chart?.result?.[0];
+      if (!result) return null;
+      const meta = result.meta;
+      const price = meta.regularMarketPrice;
+      const prev = meta.previousClose ?? meta.chartPreviousClose;
+      const change = price - prev;
+      const changePct = (change / prev) * 100;
+      return {
+        price: +price.toFixed(2),
+        change: +change.toFixed(2),
+        changePct: +changePct.toFixed(2),
+        currency: meta.currency,
+      };
+    } catch { return null; }
+  }
+
+  // GDELT DOC API v2 — free, no auth, real-time conflict/war news
+  // OAuth token cache (valid 24h, reuse across requests)
+
+  // OAuth token cache (valid 24h, reuse across requests)
+  let acledToken = null;
+  let acledTokenExpiry = 0;
+
+  async function getACLEDToken() {
+    if (acledToken && Date.now() < acledTokenExpiry) return acledToken;
+    const email    = process.env.ACLED_EMAIL;
+    const password = process.env.ACLED_PASSWORD;
+    if (!email || !password || email === 'your@email.com') return null;
+    const body = new URLSearchParams({
+      username: email, password, grant_type: 'password', client_id: 'acled',
+    });
+    const resp = await fetchWithTimeout('https://acleddata.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }, 8000);
+    if (!resp.ok) throw new Error(`ACLED token error ${resp.status}`);
+    const json = await resp.json();
+    acledToken = json.access_token;
+    acledTokenExpiry = Date.now() + (json.expires_in - 300) * 1000; // 5-min buffer
+    return acledToken;
+  }
+
+  async function fetchACLED() {
+    try {
+      const token = await getACLEDToken();
+      if (!token) return { available: false, events: 0, fatalities: 0 };
+      const since = new Date();
+      since.setDate(since.getDate() - 30);
+      const sinceStr = since.toISOString().slice(0, 10);
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const url = `https://acleddata.com/api/acled/read?_format=json&event_date=${sinceStr}|${todayStr}&event_date_where=BETWEEN&fields=fatalities&limit=500`;
+      const resp = await fetchWithTimeout(url, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      }, 15000);
+      const json = await resp.json();
+      const rows = json?.data ?? [];
+      const fatalities = rows.reduce((sum, d) => sum + (parseInt(d.fatalities) || 0), 0);
+      const count = json?.count ?? rows.length;
+      return { available: true, events: Number(count), fatalities };
+    } catch (e) {
+      console.warn('[stats] ACLED fetch failed:', e.message);
+      return { available: false, events: 0, fatalities: 0 };
+    }
+  }
+
+  const TOP_STOCKS = [
+    { symbol: 'AAPL',  name: 'Apple' },
+    { symbol: 'MSFT',  name: 'Microsoft' },
+    { symbol: 'NVDA',  name: 'Nvidia' },
+    { symbol: 'AMZN',  name: 'Amazon' },
+    { symbol: 'GOOGL', name: 'Google' },
+    { symbol: 'META',  name: 'Meta' },
+    { symbol: 'TSLA',  name: 'Tesla' },
+    { symbol: 'AVGO',  name: 'Broadcom' },
+    { symbol: 'JPM',   name: 'JPMorgan' },
+    { symbol: 'V',     name: 'Visa' },
+  ];
+
+  async function buildStats() {
+    const [oil, gold, brent, natgas, acled, ...stockPrices] = await Promise.all([
+      fetchYahooFinance('CL=F'),
+      fetchYahooFinance('GC=F'),
+      fetchYahooFinance('BZ=F'),
+      fetchYahooFinance('NG=F'),
+      fetchACLED(),
+      ...TOP_STOCKS.map(s => fetchYahooFinance(s.symbol)),
+    ]);
+    const stocks = TOP_STOCKS.map((s, i) => ({
+      symbol: s.symbol,
+      name:   s.name,
+      ...stockPrices[i],
+    })).filter(s => s.price != null);
+    return {
+      ts: new Date().toISOString(),
+      prices: { oil, gold, brent, natgas },
+      conflicts: acled,
+      stocks,
+    };
+  }
+
+  return {
+    name: 'stats',
+    configureServer(server) {
+      server.middlewares.use('/api/stats', async (req, res) => {
+        if (req.method !== 'GET') {
+          res.writeHead(405); res.end(); return;
+        }
+        try {
+          const now = Date.now();
+          if (!statsCache || now - statsCacheTime > STATS_CACHE_TTL) {
+            statsCache = await buildStats();
+            statsCacheTime = now;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(statsCache));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+    },
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// Flights Plugin — dev-only mirror of /api/flights Azure Function
+// ---------------------------------------------------------------------------
+function flightsPlugin(env = {}) {
+  console.log('[flights] Plugin initialized. Client ID present:', !!(env.OPENSKY_CLIENT_ID || process.env.OPENSKY_CLIENT_ID));
+  const _ME_COUNTRIES = [
+    { flag: '🇸🇦', ar: 'السعودية',        bbox: [16.0, 32.2, 34.5, 55.7] },
+    { flag: '🇦🇪', ar: 'الإمارات',         bbox: [22.5, 26.2, 51.0, 56.5] },
+    { flag: '🇰🇼', ar: 'الكويت',            bbox: [28.3, 30.2, 46.3, 48.7] },
+    { flag: '🇶🇦', ar: 'قطر',              bbox: [24.4, 26.4, 50.5, 51.8] },
+    { flag: '🇧🇭', ar: 'البحرين',           bbox: [25.5, 26.5, 50.2, 50.8] },
+    { flag: '🇴🇲', ar: 'عُمان',             bbox: [16.5, 26.5, 51.5, 60.0] },
+    { flag: '🇾🇪', ar: 'اليمن',             bbox: [12.0, 19.0, 42.0, 54.0] },
+    { flag: '🇮🇶', ar: 'العراق',            bbox: [29.0, 38.0, 38.5, 49.0] },
+    { flag: '🇮🇷', ar: 'إيران',             bbox: [25.0, 40.0, 44.0, 64.0] },
+    { flag: '🇸🇾', ar: 'سوريا',             bbox: [32.2, 37.5, 35.5, 42.5] },
+    { flag: '🇱🇧', ar: 'لبنان',             bbox: [33.0, 34.7, 35.0, 36.7] },
+    { flag: '🇯🇴', ar: 'الأردن',            bbox: [29.0, 33.5, 34.5, 39.5] },
+    { flag: '🇵🇸', ar: 'فلسطين',           bbox: [29.5, 33.5, 34.2, 35.9] },
+    { flag: '🇪🇬', ar: 'مصر',              bbox: [22.0, 31.7, 24.5, 37.3] },
+    { flag: '🇹🇷', ar: 'تركيا',            bbox: [35.5, 42.2, 26.0, 45.0] },
+    { flag: '🇮🇱', ar: 'إسرائيل',          bbox: [29.5, 33.5, 34.2, 35.9] },
+    { flag: '🇸🇩', ar: 'السودان',           bbox: [8.5,  22.2, 23.5, 38.7] },
+    { flag: '🇱🇾', ar: 'ليبيا',            bbox: [19.5, 33.3, 9.0,  25.5] },
+    { flag: '🇵🇰', ar: 'باكستان',           bbox: [23.5, 37.5, 60.5, 77.5] },
+    { flag: '🇦🇫', ar: 'أفغانستان',         bbox: [29.0, 38.5, 60.5, 75.0] },
+  ];
+
+  // In-memory cache for flight data to avoid OpenSky 429 errors
+  // Cache for 5 minutes to stay within OpenSky's anonymous rate limits (~400 req/day)
+  let _cache = null;
+  let _cacheTime = 0;
+  const CACHE_TTL = 300 * 1000;
+
+  // OAuth2 Token handling
+  let _token = null;
+  let _tokenExpiry = 0;
+
+  // Daily accumulator — mirrors api/flights/index.js logic
+  // Persisted to .flights-dev.json so yesterday survives server restarts
+  const FLIGHTS_DEV_FILE = join(process.cwd(), '.flights-dev.json');
+  let _dayAccum  = { date: '', globalSeen: [], bySeen: {} };  // arrays instead of Sets for JSON
+  let _yesterday = { date: '', globalTotal: 0, byCountry: {} };
+
+  // Load persisted state on startup
+  try {
+    if (existsSync(FLIGHTS_DEV_FILE)) {
+      const saved = JSON.parse(readFileSync(FLIGHTS_DEV_FILE, 'utf8'));
+      if (saved._dayAccum)  _dayAccum  = saved._dayAccum;
+      if (saved._yesterday) _yesterday = saved._yesterday;
+    }
+  } catch { /* ignore */ }
+
+  function _persistFlightState() {
+    try { writeFileSync(FLIGHTS_DEV_FILE, JSON.stringify({ _dayAccum, _yesterday })); } catch {}
+  }
+
+  function _getTodayUTC() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function _maybeResetAccum() {
+    const today = _getTodayUTC();
+    if (_dayAccum.date !== today) {
+      if (_dayAccum.date) {
+        _yesterday = {
+          date:         _dayAccum.date,
+          globalTotal:  _dayAccum.globalSeen.length,
+          byCountry:    Object.fromEntries(Object.entries(_dayAccum.bySeen).map(([k, v]) => [k, v.length])),
+        };
+      }
+      _dayAccum = { date: today, globalSeen: [], bySeen: {} };
+      _persistFlightState();
+    }
+  }
+
+  async function getOpenSkyToken() {
+    if (_token && Date.now() < _tokenExpiry) return _token;
+    
+    // Prefer OAuth2 (Client Creds)
+    const clientId = env.OPENSKY_CLIENT_ID || process.env.OPENSKY_CLIENT_ID;
+    const clientSecret = env.OPENSKY_CLIENT_SECRET || process.env.OPENSKY_CLIENT_SECRET;
+
+    if (clientId && clientSecret) {
+      try {
+        console.log(`[flights] Attempting OAuth2 with Client ID: ${clientId.substring(0,5)}...`);
+        const params = new URLSearchParams();
+        params.append('grant_type', 'client_credentials');
+        params.append('client_id', clientId);
+        params.append('client_secret', clientSecret);
+
+        // Corrected URL based on official docs (added /auth/ path)
+        const resp = await fetch('https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params
+        });
+
+        if (!resp.ok) {
+           const errText = await resp.text();
+           console.warn('[flights] OAuth2 token fetch failed:', resp.status, errText);
+           return null;
+        }
+
+        const data = await resp.json();
+        _token = data.access_token;
+        // Buffer expiry by 60s
+        _tokenExpiry = Date.now() + (data.expires_in * 1000) - 60000;
+        return _token;
+      } catch (e) {
+        console.warn('[flights] OAuth2 Exception:', e.message);
+        return null; 
+      }
+    }
+    return null;
+  }
+
+  async function fetchAirplanesLive() {
+    // Airplanes.live ADS-B API — free, no auth required
+    // point/{lat}/{lon}/{radius_nm}
+    // Center of MENA region (~25N, 45E), 1500nm radius covers entire region
+    try {
+      console.log('[flights] Trying Airplanes.live...');
+      const resp = await fetch('https://api.airplanes.live/v2/point/25/45/1500', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!resp.ok) throw new Error(`Airplanes.live HTTP ${resp.status}`);
+      const json = await resp.json();
+      const ac = json.ac || [];
+      console.log(`[flights] Airplanes.live returned ${ac.length} aircraft`);
+      // Map to OpenSky array format: 5=lon, 6=lat, 7=alt(m), 8=on_ground, 9=vel(m/s)
+      return {
+        states: ac
+          .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+          .map(a => {
+            const s = [];
+            s[5] = a.lon;
+            s[6] = a.lat;
+            s[7] = (typeof a.alt_baro === 'number' ? a.alt_baro : 0) * 0.3048; // ft -> m
+            s[8] = false; // not on ground
+            s[9] = (a.gs || 0) * 0.514444; // kts -> m/s
+            return s;
+          })
+      };
+    } catch (e) {
+      console.warn('[flights] Airplanes.live fetch failed:', e.message);
+      return null;
+    }
+  }
+
+  async function fetchFlightRadar24() {
+    // FlightRadar24 unofficial API (bounds=maxY,minY,minX,maxX)
+    // 8-42 Lat, 9-77 Lon -> 42,8,9,77
+    try {
+      const resp = await fetch('https://data-live.flightradar24.com/zones/fcgi/feed.js?bounds=42,8,9,77&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=1&maxage=14400&gliders=0&stats=1', {
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+          'Referer': 'https://www.flightradar24.com/',
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!resp.ok) throw new Error(`FR24 HTTP ${resp.status}`);
+      const json = await resp.json();
+      
+      // FR24 returns object with IDs as keys. Values are arrays.
+      // Array indices: 1: lat, 2: lon, 3: track, 4: alt (ft), 5: speed (kts)
+      const flights = Object.values(json).filter(val => Array.isArray(val));
+      
+      // Map to OpenSky format for compatibility
+      // OpenSky: 5: lon, 6: lat, 7: alt(m), 9: vel(m/s)
+      return {
+        states: flights.map(f => {
+          const s = [];
+          s[5] = f[2]; // lon
+          s[6] = f[1]; // lat
+          s[7] = f[4] * 0.3048; // ft -> m
+          s[9] = f[5] * 0.514444; // kts -> m/s
+          return s;
+        })
+      };
+    } catch (e) {
+      console.warn('[flights] FR24 fetch failed:', e.message);
+      return null;
+    }
+  }
+
+  async function fetchOpenSky() {
+    // Determine TTL based on available credentials
+    // Auth: 600s (10 min) per user request
+    const hasCreds = !!(env.OPENSKY_CLIENT_ID || (env.OPENSKY_USERNAME && env.OPENSKY_PASSWORD));
+    const currentTTL = 600 * 1000; // 10 minutes for all
+
+    // Serve from cache if fresh
+    if (_cache && (Date.now() - _cacheTime < currentTTL)) {
+       return _cache;
+    }
+
+    try {
+      const headers = { 'User-Agent': 'Mozilla/5.0' };
+      
+      const token = await getOpenSkyToken();
+      if (token) {
+        console.log('[flights] Using OAuth2 Token');
+        headers['Authorization'] = `Bearer ${token}`;
+      } else if (env.OPENSKY_USERNAME && env.OPENSKY_PASSWORD) {
+        // Basic Auth Fallback
+        console.log('[flights] Using Basic Auth');
+        const auth = Buffer.from(`${env.OPENSKY_USERNAME}:${env.OPENSKY_PASSWORD}`).toString('base64');
+        headers['Authorization'] = `Basic ${auth}`;
+      } else {
+        console.log('[flights] No credentials found, using anonymous fetch');
+      }
+
+      console.log('[flights] Fetching OpenSky API...');
+      const resp = await fetch('https://opensky-network.org/api/states/all?lamin=8&lamax=42&lomin=9&lomax=77', {
+        headers,
+        signal: AbortSignal.timeout(10000)
+      });
+      
+      let json;
+      if (resp.status === 429) {
+        console.warn('[flights] OpenSky 429 Rate Limit. Trying fallback sources...');
+        // Try Airplanes.live first (most reliable), then FR24
+        const alData = await fetchAirplanesLive();
+        if (alData && alData.states && alData.states.length > 0) {
+           console.log(`[flights] Using Airplanes.live data (${alData.states.length} flights)`);
+           json = alData;
+        } else {
+          const fr24Data = await fetchFlightRadar24();
+          if (fr24Data && fr24Data.states && fr24Data.states.length > 0) {
+             console.log(`[flights] Using FlightRadar24 data (${fr24Data.states.length} flights)`);
+             json = fr24Data;
+          } else {
+             // Fallback to cache or mock
+             console.warn('[flights] All 3 sources failed. Returning cache/mock.');
+             return _cache || {
+               count: 120, 
+               highest: 11500,
+               fastest: 920,
+               countries: [
+                 { flag: '⚠️', ar: 'Mock Data (API Error)', n: 120 }
+               ]
+             };
+          }
+        }
+      } else if (!resp.ok) {
+        throw new Error(`OpenSky HTTP ${resp.status}`);
+      } else {
+        // Normal OpenSky success
+        json = await resp.json();
+      }
+      
+      const states = (json.states || []).filter(s => !s[8]); // exclude on-ground
+      const airborne = states.filter(s => s[5] != null && s[6] != null);
+      console.log(`[flights] Parsed ${airborne.length} airborne flights.`);
+
+      let actualLat, actualLon;
+
+      _maybeResetAccum();
+      const countryCounts = {};
+      for (const s of airborne) {
+        // OpenSky index 5: lon, index 6: lat
+        actualLon = s[5];
+        actualLat = s[6];
+        const id = s[0] || `${Math.round(actualLon * 100)}_${Math.round(actualLat * 100)}`;
+
+        // global accumulation
+        if (!_dayAccum.globalSeen.includes(id)) _dayAccum.globalSeen.push(id);
+
+        for (const c of _ME_COUNTRIES) {
+          const [latMin, latMax, lonMin, lonMax] = c.bbox;
+          if (actualLat >= latMin && actualLat <= latMax && actualLon >= lonMin && actualLon <= lonMax) {
+            countryCounts[c.ar] = (countryCounts[c.ar] || 0) + 1;
+            if (!_dayAccum.bySeen[c.ar]) _dayAccum.bySeen[c.ar] = [];
+            if (!_dayAccum.bySeen[c.ar].includes(id)) _dayAccum.bySeen[c.ar].push(id);
+            break;
+          }
+        }
+      }
+      _persistFlightState();
+
+      const countries = _ME_COUNTRIES.map(c => ({
+        flag:           c.flag,
+        ar:             c.ar,
+        en:             c.en,
+        n:              countryCounts[c.ar] || 0,
+        todayTotal:     Math.max(countryCounts[c.ar] || 0, (_dayAccum.bySeen[c.ar] || []).length),
+        yesterdayTotal: _yesterday.byCountry[c.ar] || 0,
+      })).sort((a, b) => b.n - a.n);
+
+      const count          = airborne.length;
+      const totalToday     = Math.max(count, _dayAccum.globalSeen.length);
+      const yesterdayTotal = _yesterday.globalTotal;
+      const highest = airborne.length ? Math.round(Math.max(...airborne.map(s => s[7] || 0))) : 0;
+      const fastest = airborne.length ? Math.round(Math.max(...airborne.map(s => s[9] || 0)) * 3.6) : 0;
+
+      const result = { count, totalToday, yesterdayTotal, highest, fastest, countries };
+      
+      // Update cache
+      if (airborne.length > 0) {
+        _cache = result;
+        _cacheTime = Date.now();
+      } else {
+        console.warn('[flights] Got 0 flights, skipping cache update.');
+      }
+      
+      return result;
+    } catch (err) {
+      console.error('[flights] Fetch failed:', err.message);
+      return _cache || { 
+        count: 0, 
+        highest: 0, 
+        fastest: 0, 
+        countries: [{ flag: '❌', ar: 'خطأ في الاتصال', n: 0 }] 
+      };
+    }
+  }
+
+  return {
+    name: 'flights',
+    configureServer(server) {
+      server.middlewares.use('/api/flights', async (req, res) => {
+        try {
+          const data = await fetchOpenSky();
+          if (!data) {
+             res.writeHead(500, { 'Content-Type': 'application/json' });
+             res.end(JSON.stringify({ error: 'Failed to fetch flight data' }));
+             return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tweets Plugin — dev-only mirror of /api/tweets Azure Function
+// Uses official gov/org RSS feeds (Nitter is globally dead as of 2026)
+// Each source is linked to the corresponding X.com profile handle
+// ---------------------------------------------------------------------------
+function tweetsPlugin() {
+  // Official RSS sources grouped by country, linked to X handles
+  const SOURCES = [
+    // 🇺🇸 US Government & Policy
+    { handle: 'WhiteHouse',    label: 'White House',   flag: '🇺🇸', group: 'us',     rss: 'https://www.cbsnews.com/latest/rss/politics' },
+    { handle: 'StateDept',     label: 'US Policy',     flag: '🇺🇸', group: 'us',     rss: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+    { handle: 'DeptofDefense', label: 'AP US',         flag: '🇺🇸', group: 'us',     rss: 'https://feeds.apnews.com/rss/apf-intlnews' },
+    // 🇮🇱 Israel
+    { handle: 'netanyahu',     label: 'Israel PM',     flag: '🇮🇱', group: 'israel', rss: 'https://www.timesofisrael.com/feed/' },
+    { handle: 'IDF',           label: 'IDF / JPost',   flag: '🇮🇱', group: 'israel', rss: 'https://www.jpost.com/rss/rssfeedsfrontpage.aspx' },
+    // 🇮🇷 Iran
+    { handle: 'khamenei_ir',   label: 'Khamenei',      flag: '🇮🇷', group: 'iran',   rss: 'https://english.khamenei.ir/rss/' },
+    { handle: 'IranMFA_Media', label: 'Iran Analysis', flag: '🇮🇷', group: 'iran',   rss: 'https://www.al-monitor.com/rss' },
+    { handle: 'PressTV',       label: 'PressTV',       flag: '🇮🇷', group: 'iran',   rss: 'https://www.presstv.ir/RSS' },
+  ];
+
+  function decodeEntities(str) {
+    return str
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+      .replace(/&#\d+;/g, '');
+  }
+
+  function parseRssItems(xml, maxItems = 3) {
+    const items = [];
+    const parts = xml.split(/<item[\s>]/i);
+    parts.shift();
+    for (const part of parts) {
+      if (items.length >= maxItems) break;
+      const titleMatch = part.match(/<title[^>]*>\s*(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?\s*<\/title>/i);
+      const linkMatch  = part.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+      const dateMatch  = part.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i);
+      if (titleMatch) {
+        const title = decodeEntities(titleMatch[1].replace(/<[^>]+>/g, '').trim());
+        if (title.length > 5) {
+          items.push({
+            title: title.length > 200 ? title.slice(0, 197) + '…' : title,
+            link:  linkMatch ? linkMatch[1].trim() : '',
+            date:  dateMatch ? new Date(dateMatch[1].trim()).getTime() : Date.now(),
+          });
+        }
+      }
+    }
+    return items;
+  }
+
+  async function fetchSourceItems(src) {
+    try {
+      const ctrl = new AbortController();
+      const id = setTimeout(() => ctrl.abort(), 12000);
+      const resp = await fetch(src.rss, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/rss+xml,application/xml,text/xml' },
+        signal: ctrl.signal,
+      });
+      clearTimeout(id);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const xml = await resp.text();
+      const parsed = parseRssItems(xml);
+      console.log(`[tweets] ${src.handle} → ${parsed.length} items`);
+      return parsed;
+    } catch (e) {
+      console.warn(`[tweets] ${src.handle} failed: ${e.message}`);
+      return [];
+    }
+  }
+
+  let tweetsCache = null;
+  let tweetsCacheTime = 0;
+  const CACHE_TTL = 5 * 60 * 1000; // 5 min
+
+  return {
+    name: 'tweets',
+    configureServer(server) {
+      server.middlewares.use('/api/tweets', async (req, res) => {
+        if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+        try {
+          const now = Date.now();
+          if (!tweetsCache || now - tweetsCacheTime > CACHE_TTL) {
+            const results = await Promise.allSettled(
+              SOURCES.map(async (src) => {
+                const items = await fetchSourceItems(src);
+                return { ...src, items };
+              })
+            );
+            tweetsCache = results
+              .filter(r => r.status === 'fulfilled' && r.value.items.length > 0)
+              .map(r => r.value);
+            tweetsCacheTime = now;
+            console.log(`[tweets] Cache updated: ${tweetsCache.length}/${SOURCES.length} sources`);
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=180' });
+          res.end(JSON.stringify(tweetsCache || []));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+    },
+  };
+}
+
+// ── Chat Plugin — dev mirror of /api/chat Azure Function ──────────────────
+function chatPlugin() {
+  const MAX_MESSAGES = 200;
+  const MAX_MSG_LEN  = 500;
+  const CHAT_FILE = join(process.cwd(), '.chat-dev.json');
+
+  // Load persisted messages (survive server restarts)
+  let messages = [];
+  try {
+    if (existsSync(CHAT_FILE)) {
+      messages = JSON.parse(readFileSync(CHAT_FILE, 'utf8'));
+    }
+  } catch { messages = []; }
+
+  function persist() {
+    try { writeFileSync(CHAT_FILE, JSON.stringify(messages.slice(-MAX_MESSAGES))); } catch {}
+  }
+
+  // AI username detection
+  const AI_NAMES = ['محلل AI إيراني 🤖', 'محلل AI أميركي 🤖', 'محلل AI حيادي 🤖'];
+
+  return {
+    name: 'chat',
+    configureServer(server) {
+      // Parse JSON body helper
+      function parseBody(req) {
+        return new Promise((resolve) => {
+          let body = '';
+          req.on('data', (chunk) => (body += chunk));
+          req.on('end', () => {
+            try { resolve(JSON.parse(body)); } catch { resolve({}); }
+          });
+        });
+      }
+
+      server.middlewares.use('/api/chat', async (req, res) => {
+        const send = (status, obj) => {
+          res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+          res.end(JSON.stringify(obj));
+        };
+
+        if (req.method === 'GET') {
+          const url = new URL(req.url, 'http://localhost');
+          const since = parseInt(url.searchParams.get('since')) || 0;
+          const filtered = since > 0 ? messages.filter(m => m.timestamp > since) : messages;
+          send(200, { messages: filtered });
+          return;
+        }
+
+        if (req.method === 'POST') {
+          const body = await parseBody(req);
+
+          // Toggle reaction
+          if (body.messageId && body.reaction) {
+            const msg = messages.find(m => m.id === body.messageId);
+            if (!msg) { send(404, { error: 'Message not found' }); return; }
+            if (!msg.reactions) msg.reactions = {};
+            if (!msg.reactions[body.reaction]) msg.reactions[body.reaction] = [];
+            const idx = msg.reactions[body.reaction].indexOf(body.username);
+            if (idx >= 0) {
+              msg.reactions[body.reaction].splice(idx, 1);
+              if (msg.reactions[body.reaction].length === 0) delete msg.reactions[body.reaction];
+            } else {
+              msg.reactions[body.reaction].push(body.username);
+            }
+            send(200, { message: msg });
+            return;
+          }
+
+          // New message
+          const { username, message, replyTo } = body;
+          if (!username || !message) { send(400, { error: 'Missing username or message' }); return; }
+          const newMsg = {
+            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+            username: username.slice(0, 30),
+            message: message.slice(0, MAX_MSG_LEN),
+            timestamp: Date.now(),
+            reactions: {},
+          };
+          // Detect AI messages
+          if (AI_NAMES.includes(username)) {
+            newMsg.isAI = true;
+            newMsg.persona = body.persona || '';
+          }
+          if (replyTo) {
+            const parent = messages.find(m => m.id === replyTo);
+            if (parent) {
+              newMsg.replyTo = { id: parent.id, username: parent.username, message: parent.message.slice(0, 80) };
+            }
+          }
+          messages.push(newMsg);
+          messages = messages.slice(-MAX_MESSAGES);
+          persist();
+          send(201, { message: newMsg });
+          return;
+        }
+
+        send(405, { error: 'Method not allowed' });
+      });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Predictions Plugin — dev-only mirror of /api/predictions Azure Function
+// Generates one AI yes/no question per day (cached in memory), handles votes.
+// ---------------------------------------------------------------------------
+function predictionsPlugin(env) {
+  const API_KEY  = env.AZURE_OPENAI_API_KEY;
+  const ENDPOINT = env.AZURE_OPENAI_ENDPOINT;
+  const MODEL    = (env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini').trim();
+
+  // In-memory store keyed by lang
+  const store = { ar: null, en: null }; // { period, question, aiPick, aiReason, yesCount, noCount, votes, expiresAt }
+  const votes = { ar: {}, en: {} };     // anonId → 'yes'|'no'
+
+  function todayKey() {
+    const d = new Date();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+  function tomorrowMidnightUTC() {
+    const d = new Date();
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString();
+  }
+
+  async function generateQuestion(language) {
+    // Daily AI question disabled in local dev — always return a static placeholder
+    return language === 'ar'
+      ? { question: 'هل ستشهد المنطقة تهدئة دبلوماسية خلال الأسبوع القادم؟', aiPick: 'لا', aiReason: 'التوترات الإقليمية لا تزال مرتفعة بدون مسار واضح للحل.' }
+      : { question: 'Will the region see a diplomatic de-escalation in the next week?', aiPick: 'No', aiReason: 'Regional tensions remain elevated with no clear resolution path.' };
+  }
+
+  async function ensureQuestion(language) {
+    const key = todayKey();
+    if (store[language]?.period === key) return store[language];
+    console.log(`[predictions] Generating ${language} question for ${key}...`);
+    try {
+      const { question, aiPick, aiReason } = await generateQuestion(language);
+      store[language] = { period: key, question, aiPick, aiReason, yesCount: 0, noCount: 0, expiresAt: tomorrowMidnightUTC() };
+      votes[language] = {};
+      console.log(`[predictions] ${language} question ready: "${question}"`);
+    } catch (e) {
+      console.warn(`[predictions] generateQuestion(${language}) failed:`, e.message);
+    }
+    return store[language];
+  }
+
+  function sendJSON(res, status, obj) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+    res.end(JSON.stringify(obj));
+  }
+
+  return {
+    name: 'predictions',
+    configureServer(server) {
+      // Pre-generate Arabic question on startup (Arabic is default lang)
+      ensureQuestion('ar').catch(() => {});
+
+      server.middlewares.use('/api/predictions', (req, res) => {
+        const url = new URL(req.url, 'http://localhost');
+
+        if (req.method === 'GET') {
+          const language = url.searchParams.get('lang') === 'en' ? 'en' : 'ar';
+          ensureQuestion(language).then((data) => {
+            if (!data) { sendJSON(res, 503, { error: 'Question not yet generated' }); return; }
+            sendJSON(res, 200, data);
+          }).catch(e => sendJSON(res, 500, { error: e.message }));
+          return;
+        }
+
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', c => body += c);
+          req.on('end', () => {
+            try {
+              const { anonId, vote, lang: bodyLang = 'ar' } = JSON.parse(body || '{}');
+              const language = bodyLang === 'en' ? 'en' : 'ar';
+              if (!anonId || typeof anonId !== 'string' || anonId.length > 64) { sendJSON(res, 400, { error: 'Invalid anonId' }); return; }
+              if (!['yes', 'no'].includes(vote)) { sendJSON(res, 400, { error: 'vote must be yes or no' }); return; }
+              const data = store[language];
+              if (!data || data.period !== todayKey()) { sendJSON(res, 404, { error: 'No active question' }); return; }
+              if (!votes[language][anonId]) {
+                votes[language][anonId] = vote;
+                data[vote === 'yes' ? 'yesCount' : 'noCount']++;
+              }
+              sendJSON(res, 200, data);
+            } catch (e) {
+              sendJSON(res, 400, { error: 'Bad request' });
+            }
+          });
+          return;
+        }
+
+        sendJSON(res, 405, { error: 'Method not allowed' });
+      });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Commodity History Plugin — dev-only mirror of /api/commodity-history
+// ---------------------------------------------------------------------------
+function commodityHistoryPlugin() {
+  let _cache = null;
+  let _cacheTime = 0;
+  const CACHE_TTL = 2 * 60 * 60 * 1000; // 2h — daily bars are stable
+
+  const SYMBOLS = { oil: 'CL=F', gold: 'GC=F', brent: 'BZ=F', natgas: 'NG=F' };
+
+  async function fetchHistory(symbol) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=7d`;
+      const resp = await fetch(url, { headers: { 'User-Agent': 'yt-multi-player/1.0' } });
+      const json = await resp.json();
+      const result = json?.chart?.result?.[0];
+      if (!result) return [];
+      const timestamps = result.timestamp || [];
+      const closes = result.indicators?.quote?.[0]?.close || [];
+      const points = [];
+      for (let i = 0; i < timestamps.length; i++) {
+        const close = closes[i];
+        if (close == null || isNaN(close)) continue;
+        const date = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
+        points.push({ date, close: +close.toFixed(2) });
+      }
+      return points;
+    } catch { return []; }
+  }
+
+  return {
+    name: 'commodity-history',
+    configureServer(server) {
+      server.middlewares.use('/api/commodity-history', async (req, res) => {
+        if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+        try {
+          const now = Date.now();
+          if (!_cache || now - _cacheTime > CACHE_TTL) {
+            const [oil, gold, brent, natgas] = await Promise.all(
+              Object.values(SYMBOLS).map(s => fetchHistory(s))
+            );
+            _cache = { ts: new Date().toISOString(), oil, gold, brent, natgas };
+            _cacheTime = now;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(_cache));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  // Load environment variables for the current mode
+  const env = loadEnv(mode, process.cwd(), '');
+  return {
+    root: '.',
+    plugins: [presencePlugin(), resolveChannelPlugin(), checkLivePlugin(), intelligencePlugin(env), statsPlugin(), commodityHistoryPlugin(), flightsPlugin(env), tweetsPlugin(), chatPlugin(), predictionsPlugin(env)],
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+    },
+    server: {
+      port: 3000,
+      open: true,
+    },
+  };
+});

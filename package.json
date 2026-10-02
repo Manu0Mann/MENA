@@ -1,0 +1,24 @@
+{
+  "name": "mena-headlines",
+  "version": "1.0.0",
+  "description": "Real-time Middle East intelligence dashboard — multi-channel live news, flight data, market tickers, and AI analysis",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://menaheadlines.net",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OAbouHajar/mena-headlines.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "firebase": "^12.10.0",
+    "openai": "^6.25.0"
+  }
+}

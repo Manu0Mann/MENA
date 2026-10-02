@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Live Intelligence Platform</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='4' fill='%23111110'/><rect x='4' y='10' width='16' height='2' rx='1' fill='%234e7aa0'/><rect x='4' y='15' width='20' height='2' rx='1' fill='%234e7aa0' opacity='.65'/><rect x='4' y='20' width='12' height='2' rx='1' fill='%234e7aa0' opacity='.4'/><circle cx='26' cy='10' r='3' fill='%23b83030'/></svg>">
+    <link rel="stylesheet" href="/src/styles.css">
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" crossorigin=""></script>
+
+    <!-- Google AdSense -->
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9893338884955073"
+         crossorigin="anonymous"></script>
+
+    <!-- Azure Application Insights (optional — set VITE_APPINSIGHTS_CONNECTION_STRING in .env) -->
+    <script type="text/javascript">
+    if ('%VITE_APPINSIGHTS_CONNECTION_STRING%' !== '' && !('%VITE_APPINSIGHTS_CONNECTION_STRING%'.startsWith('%'))) {
+    !function(T,l,y){var S=T.location,k="script",D="instrumentationKey",C="ingestionendpoint",I="disableExceptionTracking",E="ai.device.",b="toLowerCase",w="crossOrigin",N="POST",e="appInsightsSDK",t=y.name||"appInsights";(y.name||T[e])&&(T[e]=t);var n=T[t]||function(d){var g=!1,f=!1,m={initialize:!0,queue:[],sv:"5",version:2,config:d};function v(e,t){var n={},a="Browser";return n[E+"id"]=a[b](),n[E+"type"]=a,n["ai.operation.name"]=S&&S.pathname||"_unknown_",n["ai.internal.sdkVersion"]="javascript:snippet_"+(m.sv||m.version),{time:function(){var e=new Date;function t(e){var n=""+e;return 1===n.length&&(n="0"+n),n}return e.getUTCFullYear()+"-"+t(e.getUTCMonth()+1)+"-"+t(e.getUTCDate())+"T"+t(e.getUTCHours())+":"+t(e.getUTCMinutes())+":"+t(e.getUTCSeconds())+"."+((e.getUTCMilliseconds()/1e3).toFixed(3)+"").slice(2,5)+"Z"}(),iKey:e,name:"Microsoft.ApplicationInsights."+e.replace(/-/g,"")+"."+t,sampleRate:100,tags:n,data:{baseData:{ver:2}}}}var h=d.url||y.src;if(h){function a(e){var t,n,a,i,r,o,s,c,u,p,l;g=!0,m.queue=[],f||(f=!0,i=h,s=function(){var e={},t=d.connectionString;if(t)for(var n=t.split(";"),a=0;a<n.length;a++){var i=n[a].split("=");2===i.length&&(e[i[0][b]()]=i[1])}if(!e[C]){var r=e.endpointsuffix,o=r?e.location:null;e[C]="https://"+(o?o+".":"")+"dc."+(r||"services.visualstudio.com")}return e}(),c=s[D]||d[D]||"",u=s[C],p=u?u+"/v2/track":d.endpointUrl,(l=[]).push((t="SDK LOAD Failure: Failed to load Application Insights SDK script (See stack for details)",n=i,i=p,(o=(r=v(c,"Exception")).data.baseData).exceptions=[{typeName:"SDKLoadFailed",message:t.replace(".",""),hasFullStack:!1,stack:t+"\nSnippet failed to load ["+n+"] -- Telemetry is disabled\nHelp Link: https://go.microsoft.com/fwlink/?linkid=2128109\nHost: "+(S&&S.pathname||"_unknown_")+"\nEndpoint: "+i,parsedStack:[]}],r)),l.push(function(e,t,n,a){var i=v(c,"Message"),r=i.data.baseData;return r.message='AI (Internal): 99 message:"'+("SDK LOAD Failure: Failed to load Application Insights SDK script (See stack for details) ("+n+")").replace(/\"/g,"")+'"',r.properties={endpoint:a},i}(0,0,t,p)),function(e,t){if(JSON){var n=T.fetch;if(n&&!y.useXhr)n(t,{method:N,body:JSON.stringify(e),mode:"cors"});else if(XMLHttpRequest){var a=new XMLHttpRequest;a.open(N,t),a.setRequestHeader("Content-type","application/json"),a.send(JSON.stringify(e))}}}(l,p))}function i(e,t){f||setTimeout(function(){!t&&m.core||a()},500)}var e=function(){var n=l.createElement(k);n.src=h;var e=y[w];return!e&&""!==e||"undefined"==n[w]||(n[w]=e),n.onload=i,n.onerror=a,n.onreadystatechange=function(e,t){"loaded"!==n.readyState&&"complete"!==n.readyState||i(0,t)},n}();y.ld<0?l.getElementsByTagName("head")[0].appendChild(e):setTimeout(function(){l.getElementsByTagName(k)[0].parentNode.appendChild(e)},y.ld||0)}try{m.cookie=l.cookie}catch(p){}function t(e){for(;e.length;)!function(t){m[t]=function(){var e=arguments;g||m.queue.push(function(){m[t].apply(m,e)})}}(e.pop())}var n="track",r="TrackPage",o="TrackEvent";t([n+"Event",n+"PageView",n+"Exception",n+"Trace",n+"DependencyData",n+"Metric",n+"PageViewPerformance","start"+r,"stop"+r,"start"+o,"stop"+o,"addTelemetryInitializer","setAuthenticatedUserContext","clearAuthenticatedUserContext","flush"]),m.SeverityLevel={Verbose:0,Information:1,Warning:2,Error:3,Critical:4};var s=(d.extensionConfig||{}).ApplicationInsightsAnalytics||{};if(!0!==d[I]&&!0!==s[I]){var c="onerror";t(["_"+c]);var u=T[c];T[c]=function(e,t,n,a,i){var r=u&&u(e,t,n,a,i);return!0!==r&&m["_"+c]({message:e,url:t,lineNumber:n,columnNumber:a,error:i}),r},d.autoExceptionInstrumented=!0}return m}(y.cfg);function a(){y.onInit&&y.onInit(n)}
+    (window[t]=n).queue&&0===n.queue.length?(n.queue.push(a),n.trackPageView({})):a()
+    }(window,document,{
+    src: "https://js.monitor.azure.com/scripts/b/ai.2.min.js",
+    cfg: {
+        connectionString: "%VITE_APPINSIGHTS_CONNECTION_STRING%"
+    }});
+    }
+    </script>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <button class="btn-icon" id="toggleSidebarBtn" title="Toggle Sidebar (S)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+            </button>
+            <div class="header-logo">
+                <!-- Signal / broadcast mark -->
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 6h12M2 10h17M2 14h10"/><circle cx="20" cy="6" r="2" fill="currentColor" stroke="none"/></svg>
+            </div>
+            <h1 data-i18n="appTitle">Middle East Live</h1>
+        </div>
+
+        <!-- Live Price Ticker -->
+        <div class="header-price-bar" id="headerPriceBar">
+            <button class="btn btn-stats ticker-toggle-btn" id="statsBtn" aria-label="Statistics">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span class="ticker-toggle-label">عرض المزيد</span>
+            </button>
+            <div class="header-price-ticker" id="headerPriceTicker">
+                <div class="hpc-slide" id="hpcSlideA">
+                    <span class="hpc-label">🛢 WTI</span>
+                    <span class="hpc-price">—</span>
+                    <span class="hpc-change"></span>
+                </div>
+                <div class="hpc-slide hpc-below" id="hpcSlideB">
+                    <span class="hpc-label">🥇 Gold</span>
+                    <span class="hpc-price">—</span>
+                    <span class="hpc-change"></span>
+                </div>
+            </div>
+            <div class="header-ticker-divider"></div>
+            <button class="btn btn-flight ticker-toggle-btn" id="flightBtn" aria-label="Flight Radar">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>
+                <span class="ticker-toggle-label">عرض المزيد</span>
+            </button>
+            <div class="header-flight-ticker" id="headerFlightTicker">
+                <div class="hpc-slide" id="hfcSlideA">
+                    <span class="hpc-label">✈️ Flights</span>
+                    <span class="hpc-price">—</span>
+                    <span class="hpc-change"></span>
+                </div>
+                <div class="hpc-slide hpc-below" id="hfcSlideB">
+                    <span class="hpc-label">✈️ Flights</span>
+                    <span class="hpc-price">—</span>
+                    <span class="hpc-change"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="header-controls">
+            <div class="layout-group" id="layoutGroup"></div>
+
+            <!-- Mobile-only: stats & flight buttons (price bar is hidden on small screens) -->
+            <button class="btn btn-stats mobile-hdr-btn" id="statsBtnMobile" aria-label="Statistics">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            </button>
+            <button class="btn btn-flight mobile-hdr-btn" id="flightBtnMobile" aria-label="Flight Radar">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>
+            </button>
+
+            <button class="btn btn-chat" id="chatHeaderBtn" aria-label="Chat">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span data-i18n="chat">Chat 💬</span>
+            </button>
+
+            <button class="btn btn-intel" id="intelBtn" aria-label="AI Intelligence">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <!-- Brain outline left lobe -->
+                  <path d="M9 3C6.5 3 4 5 4 7.5c0 1.2.5 2.3 1.3 3.1C4.5 11.5 4 12.7 4 14c0 2.2 1.5 4 3.5 4.5"/>
+                  <!-- Brain outline right lobe -->
+                  <path d="M15 3c2.5 0 5 2 5 4.5 0 1.2-.5 2.3-1.3 3.1.8.9 1.3 2.1 1.3 3.4 0 2.2-1.5 4-3.5 4.5"/>
+                  <!-- Center divide -->
+                  <line x1="12" y1="3" x2="12" y2="18.5"/>
+                  <!-- Neural nodes -->
+                  <circle cx="7.5" cy="8" r="1" fill="currentColor" stroke="none"/>
+                  <circle cx="7" cy="13" r="1" fill="currentColor" stroke="none"/>
+                  <circle cx="16.5" cy="8" r="1" fill="currentColor" stroke="none"/>
+                  <circle cx="17" cy="13" r="1" fill="currentColor" stroke="none"/>
+                  <circle cx="12" cy="11" r="1" fill="currentColor" stroke="none"/>
+                  <!-- Synapse connections -->
+                  <path d="M7.5 8 L12 11 L16.5 8"/>
+                  <path d="M7 13 L12 11 L17 13"/>
+                  <!-- Stem -->
+                  <path d="M10 18.5 Q12 20 14 18.5"/>
+                </svg>
+                <span data-i18n="intelBtn">AI Intelligence</span>
+            </button>
+            <a class="btn-icon" href="https://www.facebook.com/oabouhajar/" target="_blank" rel="noopener" title="Facebook">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg>
+            </a>
+            <a class="btn-icon" href="https://github.com/OAbouHajar/mena-headlines" target="_blank" rel="noopener" title="GitHub">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            </a>
+            <div class="contributor-area" id="contributorArea">
+                <button class="btn-icon contributor-badge" id="contributorBtn" title="Contributors">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </button>
+                <div class="contributor-dropdown" id="contributorDropdown">
+                    <div class="contributor-dropdown-header" data-i18n="projectContributors">Project Contributors</div>
+                    <div class="contributor-dropdown-list" id="contributorList">
+                        <div class="contributor-loading">Loading…</div>
+                    </div>
+                </div>
+            </div>
+            <button class="btn-icon" id="theatreBtn" title="Theatre Mode (T)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/></svg>
+            </button>
+            <button class="btn-icon" id="refreshBtn" title="Refresh All (R)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+            </button>
+            <div class="auth-area" id="authArea" style="display:none">
+                <button class="btn btn-secondary btn-sm" id="authBtn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    <span id="authLabel" data-i18n="signIn">Sign In</span>
+                </button>
+                <div class="auth-dropdown" id="authDropdown"></div>
+            </div>
+            <!-- Live online users -->
+            <div class="live-users-badge" id="liveUsersBadge" title="Users online now">
+                <span class="live-dot"></span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span id="liveUsersCount">1</span>
+                <div id="presenceDropdown" class="presence-dropdown"></div>
+            </div>
+            <!-- langToggleBtn hidden until EN content is ready -->
+            <button class="btn btn-secondary btn-sm" id="langToggleBtn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/></svg>
+                <span data-i18n="langLabel">EN</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Sidebar backdrop (mobile overlay) -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <!-- Main -->
+    <div class="main-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <!-- Tabs -->
+            <div class="sidebar-tabs">
+                <button class="sidebar-tab active" data-tab="channels" id="tabChannels" data-i18n="channels">Channels</button>
+                <button class="sidebar-tab" data-tab="updates" id="tabUpdates" data-i18n="updates">Updates</button>
+            </div>
+
+            <!-- Channels Panel -->
+            <div class="sidebar-panel active" id="panelChannels">
+                <div class="sidebar-header">
+                    <h3 data-i18n="channels">Channels</h3>
+                    <div class="sidebar-header-right">
+                        <span id="channelCount">0</span>
+                        <button class="btn-icon-sm" id="addChannelBtn" title="Add Channel" aria-label="Add Channel">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+                        </button>
+                        <button class="btn-icon-sm" id="resetBtn" title="Reset to defaults">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="sidebar-content" id="channelList"></div>
+                <div class="sidebar-footer">
+                    <button class="btn btn-primary sidebar-add-btn" id="addChannelBtnBottom">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                        <span data-i18n="addChannel">Add Channel</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Updates Panel -->
+            <div class="sidebar-panel" id="panelUpdates">
+                <div class="sidebar-header">
+                    <h3 data-i18n="updates">Updates</h3>
+                </div>
+                <div class="updates-feed" id="updatesFeed">
+                    <div class="update-empty" id="updatesEmpty" data-i18n="updatesEmpty">Headlines will appear here as the ticker loads.</div>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- Standalone Stats Panel -->
+        <aside class="stats-standalone closed" id="statsPanel" aria-label="Statistics Panel">
+            <div class="stats-panel-header">
+                <h3 data-i18n="stats">إحصاءات</h3>
+                <button class="btn-icon-sm stats-close-btn" id="statsCloseBtn" title="Close">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <!-- Fixed chart header (toggles only) -->
+            <div class="price-chart-header-bar">
+                <span class="price-chart-title" data-i18n="priceChartTitle">7-Day Price History</span>
+                <div class="price-chart-toggles" id="priceChartToggles"></div>
+            </div>
+            <!-- Single scrollable body: chart + commentary + prices + stocks -->
+            <div class="stats-body" id="statsBody">
+                <div class="price-chart-inner">
+                    <canvas id="priceHistoryCanvas"></canvas>
+                </div>
+                <div class="price-commentary-wrap" id="priceCommentaryEl"></div>
+                <div id="statsContent">
+                    <div class="stats-loading" data-i18n="statsLoading">Loading data…</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Standalone Flight Radar Panel -->
+        <aside class="stats-standalone flight-standalone closed" id="flightPanel" aria-label="Flight Radar Panel">
+            <div class="stats-panel-header">
+                <h3 data-i18n="flightPanel">حالة الطيران ✈️</h3>
+                <button class="btn-icon-sm stats-close-btn" id="flightCloseBtn" title="Close">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="stats-body flight-body" id="flightBody">
+                <div class="stats-loading" data-i18n="statsLoading">Loading data…</div>
+            </div>
+        </aside>
+
+        <!-- Video Area -->
+        <main class="video-area">
+            <div class="video-grid" id="videoGrid"></div>
+        </main>
+
+        <!-- Chat Panel -->
+        <aside class="stats-standalone chat-standalone closed" id="chatPanel" aria-label="Chat Panel">
+            <div class="stats-panel-header">
+                <h3 data-i18n="chat">Chat 💬</h3>
+                <div class="chat-header-actions">
+                    <button class="btn-icon-sm" id="chatUsernameBtn" title="Change name">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </button>
+                    <button class="btn-icon-sm stats-close-btn" id="chatCloseBtn" title="Close">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                    </button>
+                </div>
+            </div>
+            <!-- Username prompt -->
+            <div class="chat-username-bar" id="chatUsernameBar">
+                <input type="text" id="chatUsernameInput" maxlength="30" data-i18n-placeholder="chatUsernamePlaceholder" placeholder="Your name">
+                <button class="btn btn-primary btn-sm" id="chatUsernameSetBtn" data-i18n="chatUsernameSet">Set</button>
+            </div>
+            <!-- Messages -->
+            <div class="chat-messages" id="chatMessages">
+                <div class="chat-empty" id="chatEmpty" data-i18n="chatEmpty">No messages yet. Start the conversation!</div>
+            </div>
+            <!-- Reply context -->
+            <div class="chat-reply-bar" id="chatReplyBar" style="display:none">
+                <span class="chat-reply-text" id="chatReplyText"></span>
+                <button class="btn-icon-sm chat-reply-cancel" id="chatReplyCancel">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <!-- Input -->
+            <div class="chat-input-area">
+                <input type="text" class="chat-input" id="chatInput" maxlength="500" data-i18n-placeholder="chatPlaceholder" placeholder="Type a message…" autocomplete="off">
+                <button class="chat-send-btn" id="chatSendBtn" title="Send">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Chat FAB (visible when panel is closed) -->
+    <button class="chat-fab hidden" id="chatFab" title="Chat" aria-label="Open chat">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="chat-fab-badge" id="chatFabBadge"></span>
+    </button>
+
+    <!-- Add/Edit Channel Modal -->
+    <div class="modal-overlay" id="channelModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modalTitle" data-i18n="addNewChannel">Add New Channel</h2>
+                <button class="btn-icon-sm" id="modalCloseBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-field">
+                    <label for="modalUrl" data-i18n="youtubeUrl">YouTube URL</label>
+                    <div class="url-input-row">
+                        <input type="text" id="modalUrl" placeholder="https://www.youtube.com/@ChannelName">
+                        <button class="btn btn-primary btn-sm" id="modalResolveBtn" type="button" data-i18n="resolve">Resolve</button>
+                    </div>
+                    <span class="form-hint" data-i18n="resolveHint">Paste a channel link — name, handle, ID &amp; logo will be filled automatically</span>
+                </div>
+                <hr class="modal-divider">
+                <div class="form-field">
+                    <label for="modalName" data-i18n="channelName">Channel Name</label>
+                    <input type="text" id="modalName" data-i18n-placeholder="channelNamePlaceholder" placeholder="e.g. Al Jazeera">
+                </div>
+                <div class="form-field">
+                    <label for="modalHandle" data-i18n="youtubeHandle">YouTube Handle</label>
+                    <input type="text" id="modalHandle" data-i18n-placeholder="handlePlaceholder" placeholder="@aljazeera">
+                </div>
+                <div class="form-field">
+                    <label for="modalChannelId"><span data-i18n="channelIdLabel">Channel ID</span> <span class="required" data-i18n="channelIdRequired">(required for embed)</span></label>
+                    <input type="text" id="modalChannelId" data-i18n-placeholder="channelIdPlaceholder" placeholder="UCfiwzLy-8yKzIbsmZTzxDgw">
+                </div>
+                <div class="form-field">
+                    <label for="modalGroup" data-i18n="groupLabel">Group</label>
+                    <select id="modalGroup" class="form-select">
+                        <option value="" data-i18n="groupNone">— No group —</option>
+                    </select>
+                    <div class="custom-group-row" id="customGroupRow" style="display:none">
+                        <input type="text" id="modalCustomGroup" maxlength="30" data-i18n-placeholder="customGroupPlaceholder" placeholder="New group name">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="modalCancelBtn" data-i18n="cancel">Cancel</button>
+                <button class="btn btn-primary" id="modalSaveBtn" data-i18n="saveChannel">Save Channel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- News Ticker -->
+    <div class="news-ticker">
+        <div class="ticker-track" id="tickerTrack" aria-live="polite">
+            <!-- Ticker items injected via JS -->
+        </div>
+    </div>
+
+    <!-- Intelligence Backdrop -->
+    <div class="intel-backdrop" id="intelBackdrop"></div>
+
+    <!-- Intelligence Slide-Over Panel -->
+    <aside class="intel-panel" id="intelPanel" role="complementary" aria-label="AI Intelligence Panel">
+        <div class="intel-panel-header">
+            <div class="intel-panel-title-group">
+                <div class="intel-panel-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2a4 4 0 0 0-4 4 4 4 0 0 0 1.1 2.76C6.27 10.1 4 12.85 4 16h16c0-3.15-2.27-5.9-5.1-7.24A4 4 0 0 0 16 6a4 4 0 0 0-4-4z"/><path d="M9 16v2a3 3 0 0 0 6 0v-2"/></svg>
+                    Live Intelligence Summary
+                </div>
+                <span class="intel-timestamp" id="intelTimestamp"></span>
+            </div>
+            <!-- History timeline -->
+            <div class="intel-timeline" id="intelHistoryNav">
+                <!-- dots rendered by JS -->
+            </div>
+            <div class="intel-panel-actions">
+                <button class="btn-icon-sm" id="intelRefreshBtn" title="Refresh analysis">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                </button>
+                <button class="btn-icon-sm" id="intelCloseBtn" title="Close (Esc)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="intel-panel-body" id="intelBody">
+            <div class="intel-empty">
+                <p>Click refresh or wait for analysis to load.</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Predictions Backdrop -->
+    <div class="intel-backdrop" id="predBackdrop"></div>
+
+    <!-- AI Challenge Slide-Over Panel -->
+    <aside class="intel-panel pred-panel" id="predPanel" role="complementary" aria-label="AI Challenge Panel">
+        <div class="intel-panel-header">
+            <div class="intel-panel-title-group">
+                <div class="intel-panel-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg>
+                    <span data-i18n="predPanelTitle">AI Challenge</span>
+                </div>
+            </div>
+            <div class="intel-panel-actions">
+                <button class="btn-icon-sm" id="predCloseBtn" title="Close">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="intel-panel-body" id="predBody">
+            <div class="intel-empty"><p>Loading…</p></div>
+        </div>
+    </aside>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>
